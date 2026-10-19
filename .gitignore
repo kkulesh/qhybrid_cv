@@ -1,0 +1,6 @@
+__pycache__/
+*.pt
+data/
+features/
+*.log
+

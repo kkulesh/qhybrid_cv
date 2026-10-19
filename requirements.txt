@@ -1,0 +1,11 @@
+torch>=2.4
+pennylane>=0.40
+ultralytics>=8.3
+scikit-learn>=1.5
+scipy
+pandas
+matplotlib
+pillow
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart
