@@ -10,10 +10,13 @@ Env:  QHYBRID_MODELS    VOC models: registry.json and <id>.pt      (default mode
       QHYBRID_FEATURES  VOC features for encoding selection and training
                         (default features/voc.npz, made by scripts/extract_features.py)
       QHYBRID_DATASETS  where uploaded datasets are kept            (default datasets)
+      QHYBRID_DB        PostgreSQL connection string, e.g. postgresql://qhybrid:password@localhost:5432/qhybrid_cv
+                        (optional; without it metadata and results are kept in files, see server/db.py)
 Other features/<name>.npz files appear as built-in datasets with models in models/<name>.
 If web/dist exists it is served at "/", so one process hosts the whole app.
 """
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -31,7 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
-from server import circuit as qcircuit, datasets, jobs, prep as qprep, results as qresults
+from server import circuit as qcircuit, datasets, db, db_import, jobs, prep as qprep, results as qresults
 
 from qhybrid.encodings import make_encoding
 from qhybrid.features import YoloFeatureExtractor
@@ -74,12 +77,14 @@ class Store:
 
     def __init__(self, ds):
         self.ds = ds
-        reg = ds.models_dir / "registry.json"
-        if reg.is_file():
-            self.registry = json.loads(reg.read_text(encoding="utf-8"))
-        else:
+        self.registry = qresults.read_registry(ds)
+        if self.registry is None:
             i = datasets.info(ds)
             self.registry = {"dataset": ds.id, "classes": i.get("classes", []), "feature_dim": i.get("dim", 1280), "models": []}
+        # with PostgreSQL the list of models comes from the database (registry.json is kept as a copy)
+        from_db = db.models_of(ds.id)
+        if from_db:
+            self.registry["models"] = from_db
         self.classes = self.registry["classes"]
         self.models = {}
         for meta in self.registry["models"]:
@@ -101,6 +106,23 @@ class Store:
 
 
 stores: dict[str, Store] = {}
+
+
+def sync_database():
+    """Create the tables and copy into PostgreSQL what is still only in files (datasets, registries of datasets
+    that have no models in the database yet, experiment runs not imported yet)."""
+    if not db.startup():
+        return
+    try:
+        c = db_import.import_datasets(all_datasets(), only_missing_models=True)
+        e = db_import.import_experiments(ROOT / "results", only_new=True)
+        log.info("[база] синхронізовано: наборів %d, нових моделей %d, нових запусків експериментів %d",
+                 c["datasets"], c["models"], e["runs"])
+    except Exception as e:
+        log.warning("[база] синхронізація з файлами не вдалася: %s", e)
+
+
+sync_database()
 
 
 def get_store(ds_id) -> Store:
@@ -187,7 +209,7 @@ def result(st, model_id, p, timings, top_k, device="default.qubit", shots=None):
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "datasets": len(all_datasets()), "models": len(get_store("voc").models)}
+    return {"status": "ok", "datasets": len(all_datasets()), "models": len(get_store("voc").models), "database": db.status()}
 
 
 def device_status():
@@ -272,10 +294,13 @@ async def classify(file: UploadFile = File(...), model: str = Form("amplitude-8q
     st = get_store(dataset)
     model_or_404(st, model)
     shots = check_device(device, shots)
-    img, shown = prepared(read_image(await file.read()), prep)
+    data = await file.read()
+    img, shown = prepared(read_image(data), prep)
     z, t = features(img)
     p, th = run_head(st, model, z, device, shots)
-    return {**result(st, model, p, {**t, **th}, top_k, device, shots), "prepared": shown}
+    out = result(st, model, p, {**t, **th}, top_k, device, shots)
+    db.save_classifications(dataset, [out], file.filename, hashlib.sha256(data).hexdigest())
+    return {**out, "prepared": shown}
 
 
 @app.post("/api/classify/compare")
@@ -286,12 +311,14 @@ async def compare(file: UploadFile = File(...), top_k: int = Form(3), dataset: s
     shots = check_device(device, shots)
     if not st.models:
         raise HTTPException(404, "Для цього набору ще немає навчених моделей.")
-    img, shown = prepared(read_image(await file.read()), prep)
+    data = await file.read()
+    img, shown = prepared(read_image(data), prep)
     z, t = features(img)
     out = []
     for mid in st.models:
         p, th = run_head(st, mid, z, device, shots)
         out.append(result(st, mid, p, th, top_k, device, shots))
+    db.save_classifications(dataset, out, file.filename, hashlib.sha256(data).hexdigest(), compare=True)
     return {"backbone_ms": round(t["preprocess"] + t["backbone"], 3), "results": out, "prepared": shown}
 
 
@@ -338,8 +365,15 @@ async def upload_dataset(file: UploadFile = File(...), name: str = Form(...), te
         zp.unlink(missing_ok=True)
         raise HTTPException(400, "Файл не є ZIP-архівом.")
     log.info("[набір %s] завантажено архів %s (%.1f МБ)", ds_id, file.filename, size / 2 ** 20)
+    def target(j):
+        res = datasets.run_import(j, zp, DATA_DIR, extractor, extract_lock, log)
+        ds = all_datasets().get(ds_id)
+        if ds is not None:
+            db.save_dataset(ds, datasets.info(ds))
+        return res
+
     job = jobs.start("dataset", {"dataset": ds_id, "name": name, "test_share": test_share, "file": file.filename},
-                     lambda j: datasets.run_import(j, zp, DATA_DIR, extractor, extract_lock, log), log)
+                     target, log)
     if job is None:
         zp.unlink(missing_ok=True)
     return {**started(job), "dataset": ds_id}
@@ -359,6 +393,7 @@ def delete_dataset(ds_id: str):
     else:
         shutil.rmtree(DATA_DIR / ds_id, ignore_errors=True)
     stores.pop(ds_id, None)
+    db.delete_dataset(ds_id)
     log.info("[набір %s] видалено", ds_id)
     return {"deleted": ds_id}
 
@@ -410,7 +445,12 @@ def started(job):
 def start_selection(p: SelectionParams):
     ds = get_dataset(p.dataset)
     need_features(ds); check_encodings(p.encodings)
-    return started(jobs.start("selection", p.model_dump(), lambda j: jobs.run_selection(j, ds.features, log), log))
+    def target(j):
+        res = jobs.run_selection(j, ds.features, log)
+        db.save_selection(ds, db_import.dataset_info(ds), j.params, res)
+        return res
+
+    return started(jobs.start("selection", p.model_dump(), target, log))
 
 
 @app.post("/api/train")
@@ -422,8 +462,13 @@ def start_training(p: TrainParams):
     if p.kind == "hybrid":
         check_encodings([p.encoding])
     st = get_store(p.dataset)
+
+    def register(meta, model):  # the classification page sees the model at once; the database records it
+        st.add(meta, model)
+        db.save_model(ds, db_import.dataset_info(ds), meta, ds.models_dir / f"{meta['id']}.pt")
+
     return started(jobs.start("train", p.model_dump(),
-                              lambda j: jobs.run_training(j, ds.features, ds.models_dir, st.add, log), log))
+                              lambda j: jobs.run_training(j, ds.features, ds.models_dir, register, log), log))
 
 
 @app.get("/api/jobs")
@@ -505,8 +550,15 @@ def run_circuit(c: CircuitRun):
 
 @app.get("/api/results")
 def results():
-    """Trained models of every dataset and the experiment grids in results/ (averaged over seeds)."""
-    return {"models": qresults.model_rows(all_datasets()), "experiments": qresults.experiment_rows(ROOT / "results")}
+    """Trained models of every dataset and the experiment grids (averaged over seeds); with PostgreSQL also the
+    encoding-selection runs and the latest classifications."""
+    try:
+        return {"source": "db" if db.enabled() else "files", "database": db.status(),
+                "models": qresults.model_rows(all_datasets()), "experiments": qresults.experiment_rows(ROOT / "results"),
+                "selection_runs": qresults.selection_runs(), "classifications": qresults.classifications()}
+    except Exception as e:  # e.g. the database went away while the server runs
+        log.warning("[база] читання результатів: %s", e)
+        raise HTTPException(503, f"Не вдалося прочитати результати з бази даних: {e}")
 
 
 dist = ROOT / "web" / "dist"

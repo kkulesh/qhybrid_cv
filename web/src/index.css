@@ -363,3 +363,8 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; b
 .device-pick { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 10px; }
 .device-pick .hint { grid-column: 1 / -1; margin: 0; }
 @media (max-width: 600px) { .device-pick { grid-template-columns: minmax(0, 1fr); } .res { padding: 8px; } }
+/* the database note sits close above «Навчені моделі», its text in line with the panel heading (border 1 px + padding 12 px) */
+.res-source { margin: -6px 0 -6px; padding: 0 13px; font-size: 13px; line-height: 1.3; color: var(--muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.res-source.warn { color: var(--warn-text); background: var(--warn-bg); padding: 6px 10px; border-radius: 6px; }
+.res-source .btn.small { padding: 2px 8px; font-size: 12px; }
+.res-img { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
