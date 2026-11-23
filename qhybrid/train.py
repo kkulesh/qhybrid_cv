@@ -7,14 +7,15 @@ from sklearn.metrics import accuracy_score, f1_score
 from torch import nn
 
 
-def train_model(model, Ztr, ytr, epochs=15, lr=0.01, batch_size=64, seed=0, val=None):
-    """Adam + cross-entropy. If val=(Z, y) is given, macro-F1 on it is recorded after each epoch."""
+def train_model(model, Ztr, ytr, epochs=15, lr=0.01, batch_size=64, seed=0, val=None, on_epoch=None):
+    """Adam + cross-entropy. If val=(Z, y) is given, macro-F1 on it is recorded after each epoch.
+    on_epoch(epoch, record) is called after every epoch (used by the web server to stream progress)."""
     torch.manual_seed(seed)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
     Z, y = torch.as_tensor(Ztr), torch.as_tensor(ytr)
     history = []
-    for _ in range(epochs):
+    for epoch in range(epochs):
         model.train()
         perm = torch.randperm(len(Z))
         total = 0.0
@@ -29,6 +30,8 @@ def train_model(model, Ztr, ytr, epochs=15, lr=0.01, batch_size=64, seed=0, val=
         if val is not None:
             rec["val_f1"] = evaluate(model, *val)["f1"]
         history.append(rec)
+        if on_epoch is not None:
+            on_epoch(epoch, rec)
     return history
 
 

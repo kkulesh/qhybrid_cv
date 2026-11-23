@@ -13,6 +13,7 @@ export interface ModelInfo {
   test_f1: number
   test_acc: number
   train_s: number
+  custom?: boolean   // trained on the «Тренування» page
 }
 
 export interface Registry { dataset: string; classes: string[]; models: ModelInfo[] }
@@ -37,21 +38,24 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>
 }
 
-export const getModels = () => call<Registry>('/api/models')
-export const getSamples = () => call<Sample[]>('/api/samples')
-export const sampleUrl = (name: string) => `/api/samples/${encodeURIComponent(name)}`
+const q = (dataset: string) => `dataset=${encodeURIComponent(dataset)}`
+export const getModels = (dataset = 'voc') => call<Registry>(`/api/models?${q(dataset)}`)
+export const getSamples = (dataset = 'voc') => call<Sample[]>(`/api/samples?${q(dataset)}`)
+export const sampleUrl = (name: string, dataset = 'voc') => `/api/samples/${encodeURIComponent(name)}?${q(dataset)}`
 
-export function classify(file: Blob, model: string, topK = 5) {
+export function classify(file: Blob, model: string, topK = 5, dataset = 'voc') {
   const fd = new FormData()
   fd.append('file', file, 'image')
   fd.append('model', model)
   fd.append('top_k', String(topK))
+  fd.append('dataset', dataset)
   return call<Prediction>('/api/classify', { method: 'POST', body: fd })
 }
 
-export function compareAll(file: Blob, topK = 3) {
+export function compareAll(file: Blob, topK = 3, dataset = 'voc') {
   const fd = new FormData()
   fd.append('file', file, 'image')
   fd.append('top_k', String(topK))
+  fd.append('dataset', dataset)
   return call<Comparison>('/api/classify/compare', { method: 'POST', body: fd })
 }

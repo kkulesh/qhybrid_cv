@@ -16,7 +16,7 @@ for image_set, split in [("trainval", "train"), ("test", "test")]:
     c = make_crops(a.voc, a.out, image_set, split, a.min_size)
     stats[split] = {k: c[k] for k in VOC_CLASSES}
     print(split, sum(c.values()), "crops")
-Path(a.out, "stats.json").write_text(json.dumps(stats, indent=1))
+Path(a.out, "stats.json").write_text(json.dumps(stats, indent=1), encoding="utf-8")
 print(f"{'class':<12}{'train':>7}{'test':>7}")
 for k in VOC_CLASSES:
     print(f"{k:<12}{stats['train'][k]:>7}{stats['test'][k]:>7}")

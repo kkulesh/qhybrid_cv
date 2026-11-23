@@ -32,7 +32,7 @@ def make_crops(voc_root, out, image_set, split, min_size=32, margin=0.1, skip_di
                skip_truncated=False):
     """Crop all objects of one VOC image set. Returns a Counter of crops per class."""
     voc_root, out = Path(voc_root), Path(out)
-    ids = (voc_root / "ImageSets" / "Main" / f"{image_set}.txt").read_text().split()
+    ids = (voc_root / "ImageSets" / "Main" / f"{image_set}.txt").read_text(encoding="utf-8").split()
     counts = Counter()
     for img_id in ids:
         objs = parse_annotation(voc_root / "Annotations" / f"{img_id}.xml")

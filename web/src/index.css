@@ -270,3 +270,67 @@ table.state th { color: var(--muted); font-weight: 500; }
 .tbl .bad-row td:nth-child(2) { color: var(--danger); }
 .stamp { font-weight: 400; }
 .cls-input .panel-head .btn.primary { white-space: nowrap; }
+
+/* ---------- encoding selection and training pages ---------- */
+.lab {
+  display: grid; gap: 8px; padding-block: 8px; align-items: start;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  grid-template-columns: minmax(0, 360px) minmax(0, 1fr);
+}
+@media (max-width: 900px) { .lab { grid-template-columns: minmax(0, 1fr); } }
+.lab .sub { font-size: 13px; font-weight: 600; margin: 14px 0 6px; color: var(--muted); }
+.lab-form { display: flex; flex-direction: column; gap: 10px; }
+.lab-out > .hint { margin: 0 0 10px; }
+.lab-form .hint.lead { margin: 0; font-size: 13px; line-height: 1.45; }
+.lab-form .field input { width: 100%; }
+.lab .note { margin: 0; font-size: 12px; color: var(--accent); }
+.checks { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px 8px; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+.checks legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
+.checks label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.grid2 { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 0; }
+.lab .actions { margin-top: 2px; }
+a.btn { text-decoration: none; display: inline-block; color: inherit; }
+a.btn.primary { color: var(--panel); }
+.btn.danger-btn { color: var(--danger); border-color: var(--danger); }
+.progress { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.ptrack { flex: 1 1 200px; height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+.ptrack span { display: block; height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.25s; }
+table.heat { border-collapse: separate; border-spacing: 2px; font-size: 13px; font-variant-numeric: tabular-nums; }
+table.heat th { color: var(--muted); font-weight: 500; padding: 4px 8px; text-align: center; white-space: nowrap; }
+table.heat th[scope="row"] { text-align: left; }
+table.heat td { min-width: 58px; padding: 7px 8px; text-align: center; border-radius: 4px; color: var(--text); cursor: default; }
+table.heat td.dark { color: var(--panel); font-weight: 600; }
+table.heat td.empty { color: var(--muted); background: var(--bg); }
+table.heat td.best { outline: 2px solid var(--text); outline-offset: -2px; }
+.scale { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.scale i { width: 90px; height: 8px; border-radius: 4px; background: linear-gradient(to right, color-mix(in oklab, var(--accent) 8%, var(--panel)), color-mix(in oklab, var(--accent) 88%, var(--panel))); }
+.reco { border-top: 1px solid var(--border); margin-top: 14px; }
+.reco-main { font-size: 17px; margin: 0 0 6px; }
+.rank { margin: 0; padding-left: 20px; font-size: 13px; display: grid; gap: 2px; }
+.more { margin-top: 14px; font-size: 13px; }
+.more summary { cursor: pointer; color: var(--muted); }
+.tbl.plain tbody tr { cursor: default; }
+.tbl.plain td { font-variant-numeric: tabular-nums; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.lchart { margin: 0; min-width: 0; }
+.lchart figcaption { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.lchart svg { width: 100%; height: auto; display: block; touch-action: none; }
+.lchart .grid { stroke: var(--border); }
+.lchart .axis { fill: var(--muted); font-size: 11px; }
+.lchart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.lchart .pt { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+.lchart .cross { stroke: var(--muted); stroke-dasharray: 3 3; }
+.lchart-foot { display: flex; justify-content: space-between; gap: 8px; min-height: 18px; }
+.lchart-foot .tip { font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* ---------- datasets page ---------- */
+.tree { margin: 0; padding: 8px 10px; background: var(--bg); border-radius: 6px; font: 12.5px "IBM Plex Mono", ui-monospace, monospace; overflow-x: auto; }
+.drop.small-drop { min-height: 90px; }
+.ds-table td { vertical-align: middle; }
+.ds-table tr.cur td { background: var(--cell-hover); }
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.badge { display: inline-block; margin-left: 8px; font-size: 11px; padding: 1px 6px; border-radius: 10px; background: var(--accent); color: var(--panel); vertical-align: 1px; }
+.classes { font-size: 13px; margin: 0; line-height: 1.5; }
+.import-status { border-top: 1px solid var(--border); padding-top: 10px; }
+code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; background: var(--bg); padding: 0 3px; border-radius: 3px; }

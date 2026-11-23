@@ -1,6 +1,8 @@
 __pycache__/
+.venv/
 *.pt
 data/
 features/
 *.log
-
+results/
+datasets/

@@ -90,4 +90,4 @@ if __name__ == "__main__":
     order = {"classical": 0, "amplitude": 1, "angle": 2, "zz": 3}
     models.sort(key=lambda m: (order[m["encoding"] or "classical"], m["n"] or 0))
     (Path(a.out) / "registry.json").write_text(json.dumps(
-        {"dataset": Path(a.features).stem, "classes": classes, "feature_dim": 1280, "models": models}, indent=1, ensure_ascii=False))
+        {"dataset": Path(a.features).stem, "classes": classes, "feature_dim": 1280, "models": models}, indent=1, ensure_ascii=False), encoding="utf-8")

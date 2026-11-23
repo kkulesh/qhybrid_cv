@@ -53,7 +53,7 @@ def load(path):
 
 def append(path, row):
     new = not path.exists()
-    with open(path, "a", newline="") as f:
+    with open(path, "a", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(row))
         if new:
             w.writeheader()

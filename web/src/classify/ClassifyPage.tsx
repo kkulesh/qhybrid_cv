@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { classify, compareAll, getModels, getSamples, sampleUrl, type Comparison, type ModelInfo, type Prediction, type Registry, type Sample, type Timings } from './api'
+import { DatasetPicker, useDatasets } from '../datasets/datasets'
 import { ENCODING_UK, modelName, uk } from './labels'
 
 const STAGES: { key: keyof Timings; name: string; cls: string }[] = [
@@ -30,8 +31,14 @@ async function shrink(file: Blob, maxSide = 800): Promise<Blob> {
 }
 
 export function ClassifyPage() {
+  const { current: ds } = useDatasets()
+  const dsId = ds?.id ?? 'voc'
   const [registry, setRegistry] = useState<Registry | null>(null)
-  const [samples, setSamples] = useState<Sample[]>([])
+  // samples are tagged with their dataset, so a switch never shows (or requests) the previous dataset's images
+  const [sampleSet, setSampleSet] = useState<{ ds: string, list: Sample[] }>({ ds: '', list: [] })
+  const samples = sampleSet.ds === dsId ? sampleSet.list : []
+  const dsRef = useRef(dsId)  // a late answer for a dataset no longer chosen is dropped
+  dsRef.current = dsId
   const [offline, setOffline] = useState<string | null>(null)
   const [modelId, setModelId] = useState('amplitude-8q')
   const [image, setImage] = useState<Image | null>(null)
@@ -43,18 +50,32 @@ export function ClassifyPage() {
   const fileRef = useRef<HTMLInputElement>(null)
   const reqId = useRef(0)
 
+  const applyRegistry = useCallback((r: Registry) => {
+    setRegistry(r)
+    // keep the chosen model if this dataset has it, otherwise the best default
+    setModelId((cur) => r.models.some((m) => m.id === cur) ? cur
+      : (r.models.find((m) => m.id === 'amplitude-8q') ?? r.models.find((m) => m.kind === 'hybrid') ?? r.models[0])?.id ?? '')
+  }, [])
   const load = useCallback(() => {
     setOffline(null)
-    Promise.all([getModels(), getSamples()])
-      .then(([r, s]) => { setRegistry(r); setSamples(s) })
+    Promise.all([getModels(dsId), getSamples(dsId)])
+      .then(([r, s]) => { if (dsRef.current !== dsId) return; applyRegistry(r); setSampleSet({ ds: dsId, list: s }) })
       .catch(() => setOffline('Сервер класифікації недоступний. Запустіть бекенд: uvicorn server.app:app --port 8000'))
-  }, [])
+  }, [dsId, applyRegistry])
   useEffect(load, [load])
+  // another dataset: its own classes and models, so the old result no longer applies
+  useEffect(() => { setPred(null); setCmp(null); setError(null); setImage((old) => (old?.truth ? null : old)) }, [dsId])
+  // a model trained on the «Тренування» page appears in the list without reloading the page
+  useEffect(() => {
+    const on = () => { getModels(dsId).then(applyRegistry).catch(() => {}) }
+    window.addEventListener('qhybrid:models-changed', on)
+    return () => window.removeEventListener('qhybrid:models-changed', on)
+  }, [dsId, applyRegistry])
 
   const groups = useMemo(() => {
     const g = new Map<string, ModelInfo[]>()
     for (const m of registry?.models ?? []) {
-      const k = m.kind === 'classical' ? 'Класичні' : `Гібридні: ${ENCODING_UK[m.encoding ?? ''] ?? m.encoding}`
+      const k = m.custom ? 'Навчені на сторінці «Тренування»' : m.kind === 'classical' ? 'Класичні' : `Гібридні: ${ENCODING_UK[m.encoding ?? ''] ?? m.encoding}`
       g.set(k, [...(g.get(k) ?? []), m])
     }
     return [...g]
@@ -67,7 +88,7 @@ export function ClassifyPage() {
   }
   const pickSample = async (s: Sample) => {
     try {
-      const r = await fetch(sampleUrl(s.name))
+      const r = await fetch(sampleUrl(s.name, dsId))
       if (!r.ok) throw new Error()
       setNewImage(await r.blob(), s.name, s.label)
     } catch { setError('Не вдалося завантажити приклад.') }
@@ -91,12 +112,12 @@ export function ClassifyPage() {
   })
 
   const run = async (mode: 'one' | 'all') => {
-    if (!image) return
+    if (!image || !modelId) return
     const id = ++reqId.current
     setBusy(true); setError(null)
     try {
-      if (mode === 'one') { const r = await classify(image.blob, modelId); if (id === reqId.current) { setPred({ ...r, at: new Date() }); setCmp(null) } }
-      else { const r = await compareAll(image.blob); if (id === reqId.current) { setCmp(r); setPred(null) } }
+      if (mode === 'one') { const r = await classify(image.blob, modelId, 5, dsId); if (id === reqId.current) { setPred({ ...r, at: new Date() }); setCmp(null) } }
+      else { const r = await compareAll(image.blob, 3, dsId); if (id === reqId.current) { setCmp(r); setPred(null) } }
     } catch (e) { if (id === reqId.current) setError(e instanceof Error && e.message !== 'Failed to fetch' ? e.message : 'Сервер не відповідає.') }
     finally { if (id === reqId.current) setBusy(false) }
   }
@@ -136,13 +157,13 @@ export function ClassifyPage() {
             : <span>Перетягніть сюди фото, натисніть, щоб обрати файл, або вставте його через Ctrl+V.<br />Найкраще, коли об'єкт займає більшу частину кадру: моделі навчено на вирізках об'єктів.</span>}
         </div>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = '' }} />
-        {image && <p className="hint">{image.truth ? <>Приклад із тесту VOC, справжній клас: <b>{uk(image.truth)}</b> ({image.truth})</> : <>Ваше зображення: {image.name}</>}</p>}
+        {image && <p className="hint">{image.truth ? <>Приклад із тестової частини набору, справжній клас: <b>{uk(image.truth)}</b>{uk(image.truth) !== image.truth && <> ({image.truth})</>}</> : <>Ваше зображення: {image.name}</>}</p>}
 
-        <h3 className="sub">Приклади з PASCAL VOC</h3>
+        {samples.length > 0 && <h3 className="sub">Приклади з набору «{ds?.name ?? 'PASCAL VOC 2007'}»</h3>}
         <div className="gallery">
           {samples.map((s) => (
-            <button key={s.name} className={`thumb${image?.name === s.name ? ' on' : ''}`} onClick={() => pickSample(s)} title={`${uk(s.label)} (${s.label})`}>
-              <img src={sampleUrl(s.name)} alt={uk(s.label)} loading="lazy" />
+            <button key={s.name} className={`thumb${image?.name === s.name ? ' on' : ''}`} onClick={() => pickSample(s)} title={uk(s.label) !== s.label ? `${uk(s.label)} (${s.label})` : s.label}>
+              <img src={sampleUrl(s.name, dsId)} alt={uk(s.label)} loading="lazy" />
             </button>
           ))}
         </div>
@@ -150,6 +171,8 @@ export function ClassifyPage() {
 
       <section className="panel cls-ctrl">
         <header className="panel-head"><h2>Модель</h2></header>
+        <DatasetPicker />
+        {registry && registry.models.length === 0 && <p className="warn">Для цього набору ще немає навчених моделей. Навчіть модель на сторінці <a href="#train">«Тренування»</a>.</p>}
         <label className="field">
           <span>Кодування і кількість кубітів</span>
           <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
@@ -162,8 +185,8 @@ export function ClassifyPage() {
         </label>
         {model && <ModelCard m={model} />}
         <div className="actions">
-          <button className="btn" disabled={!image || busy} onClick={() => run('one')}>Класифікувати ще раз</button>
-          <button className="btn" disabled={!image || busy} onClick={() => run('all')}>Порівняти всі моделі</button>
+          <button className="btn" disabled={!image || busy || !modelId} onClick={() => run('one')}>Класифікувати ще раз</button>
+          <button className="btn" disabled={!image || busy || !modelId} onClick={() => run('all')}>Порівняти всі моделі</button>
         </div>
         {busy && <p className="hint">Обчислення…</p>}
         {error && <p className="error-note" role="alert">{error}</p>}
@@ -188,7 +211,7 @@ function ModelCard({ m }: { m: ModelInfo }) {
         ['Кубіти', String(m.n)],
         ['Масштаб γ', String(m.gamma)],
       ]
-  rows.push(['Параметри', m.params.toLocaleString('uk-UA')], ['F1 на тесті VOC', m.test_f1.toFixed(3)], ['Точність', (m.test_acc * 100).toFixed(1) + ' %'])
+  rows.push(['Параметри', m.params.toLocaleString('uk-UA')], ['F1 на тесті', m.test_f1.toFixed(3)], ['Точність', (m.test_acc * 100).toFixed(1) + ' %'])
   return <dl className="kv">{rows.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
 }
 

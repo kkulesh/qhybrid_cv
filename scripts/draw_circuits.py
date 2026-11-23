@@ -37,5 +37,5 @@ for name in ["angle", "zz", "amplitude"]:
         fig.suptitle(f"{name} encoding, {a.qubits} qubits, {a.layers} variational layers", fontsize=14)
         fig.savefig(out / f"{name}_{a.qubits}q_{suffix}.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
-    (out / f"{name}_{a.qubits}q.txt").write_text(qml.draw(circuit, level="device", decimals=2)(x, weights))
+    (out / f"{name}_{a.qubits}q.txt").write_text(qml.draw(circuit, level="device", decimals=2)(x, weights), encoding="utf-8")
     print(name, "ok")

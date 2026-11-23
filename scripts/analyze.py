@@ -103,7 +103,7 @@ for c in CRIT:
     out(f"| {c} | {np.mean(reg):.3f} | {np.max(reg):.3f} |")
 reg = [g.f1.max() - g[g.gamma == 1.0].f1.iloc[0] for _, g in m.groupby(["dataset", "n", "encoding"])]
 out(f"| fixed γ=1 | {np.mean(reg):.3f} | {np.max(reg):.3f} |")
-(R / "summary.md").write_text("\n".join(lines))
+(R / "summary.md").write_text("\n".join(lines), encoding="utf-8")
 print("\n".join(lines))
 
 # ---------- figures ----------

@@ -1,12 +1,41 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Circuit } from '../quantum/gates'
 import { bitstring, sampleCounts, type SimResult } from '../quantum/simulator'
+
+type Runner = 'browser' | 'server'
+interface ServerRun { counts: Record<string, number>; probs: number[]; time_ms: number; shots: number; seed: number; circuit: Circuit }
 
 type Tab = 'probs' | 'counts' | 'state' | 'bloch'
 
-export function ResultsPanel({ sim, nQubits }: { sim: SimResult; nQubits: number }) {
+export function ResultsPanel({ sim, nQubits, circuit }: { sim: SimResult; nQubits: number; circuit: Circuit }) {
   const [tab, setTab] = useState<Tab>('probs')
   const [shots, setShots] = useState(1024)
   const [seed, setSeed] = useState(1)
+  const [runner, setRunner] = useState<Runner>('browser')
+  const [run, setRun] = useState<ServerRun | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const req = useRef(0)
+
+  // Server mode: the circuit is executed by PennyLane on the backend (server/circuit.py) and logged there.
+  const runOnServer = async (s: number) => {
+    const id = ++req.current
+    setBusy(true); setErr(null)
+    try {
+      const r = await fetch('/api/circuit/run', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nQubits: circuit.nQubits, ops: circuit.ops, shots, seed: s }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : `Помилка сервера (${r.status}).`)
+      if (id === req.current) setRun({ ...j, shots, seed: s, circuit })
+    } catch (e) {
+      if (id === req.current) setErr(e instanceof TypeError ? 'Сервер недоступний. Запустіть бекенд: uvicorn server.app:app --port 8000' : (e as Error).message)
+    } finally { if (id === req.current) setBusy(false) }
+  }
+  const rerun = () => { const s = seed + 1; setSeed(s); if (runner === 'server') runOnServer(s) }
+  useEffect(() => { if (runner === 'server' && tab === 'counts' && !run && sim.measured.length) runOnServer(seed) }, [runner, tab])  // eslint-disable-line react-hooks/exhaustive-deps
+  const stale = run && (run.circuit !== circuit || run.shots !== shots)
   return (
     <section className="panel results">
       <header className="panel-head tabs" role="tablist">
@@ -25,10 +54,26 @@ export function ResultsPanel({ sim, nQubits }: { sim: SimResult; nQubits: number
                 <label className="field inline"><span>Кількість вимірювань (shots)</span>
                   <input type="number" min={1} max={100000} value={shots} onChange={(e) => setShots(Math.max(1, Math.min(100000, Number(e.target.value) || 1)))} />
                 </label>
-                <button className="btn" onClick={() => setSeed((s) => s + 1)}>Повторити запуск</button>
+                <label className="field inline"><span>Виконавець</span>
+                  <select value={runner} onChange={(e) => setRunner(e.target.value as Runner)}>
+                    <option value="browser">Браузер (вбудований симулятор)</option>
+                    <option value="server">Сервер (PennyLane)</option>
+                  </select>
+                </label>
+                {runner === 'server' && stale
+                  ? <button className="btn primary" disabled={busy} onClick={() => runOnServer(seed)}>Запустити на сервері</button>
+                  : <button className="btn" disabled={busy} onClick={rerun}>Повторити запуск</button>}
                 <span className="muted small">Біти: c[{[...sim.measured].sort((a, b) => b - a).join('], c[')}]</span>
               </div>
-              <CountsChart sim={sim} shots={shots} seed={seed} />
+              {runner === 'browser' && <CountsChart sim={sim} shots={shots} seed={seed} />}
+              {runner === 'server' && (
+                <>
+                  {busy && <p className="hint">Виконання на сервері…</p>}
+                  {err && <p className="error-note" role="alert">{err}</p>}
+                  {stale && !busy && <p className="warn">Схему або кількість вимірювань змінено після запуску. Натисніть «Запустити на сервері».</p>}
+                  {run && <ServerCounts run={run} sim={sim} current={!stale} />}
+                </>
+              )}
             </>
           )
       )}
@@ -93,6 +138,22 @@ function CountsChart({ sim, shots, seed }: { sim: SimResult; shots: number; seed
     return [...counts.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([label, c]) => ({ label: `${label} (${c})`, value: c / shots }))
   }, [sim, shots, seed])
   return <Bars items={items} yLabel={`Частка з ${shots} вимірювань, %`} />
+}
+
+function ServerCounts({ run, sim, current }: { run: ServerRun; sim: SimResult; current: boolean }) {
+  const items = Object.entries(run.counts).sort(([a], [b]) => (a < b ? -1 : 1)).map(([label, c]) => ({ label: `${label} (${c})`, value: c / run.shots }))
+  // compare PennyLane's exact probabilities with the browser simulator (same circuit only)
+  const diff = current && run.probs.length === sim.probs.length
+    ? Math.max(...run.probs.map((p, i) => Math.abs(p - sim.probs[i]))) : null
+  return (
+    <>
+      <Bars items={items} yLabel={`Частка з ${run.shots} вимірювань, %`} />
+      <p className="muted small">
+        Виконано на сервері в PennyLane (default.qubit) за {run.time_ms.toFixed(1).replace('.', ',')} мс, зерно {run.seed}. Запуск записано в журнал сервера.
+        {diff !== null && <> Точні ймовірності PennyLane збігаються з браузерним симулятором: найбільша різниця {diff < 1e-12 ? diff.toExponential(0) : diff.toFixed(6)}.</>}
+      </p>
+    </>
+  )
 }
 
 function StateTable({ sim, n }: { sim: SimResult; n: number }) {

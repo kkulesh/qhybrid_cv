@@ -167,7 +167,7 @@ export default function App() {
         </section>
         <CodePanel circuit={circuit} title={doc.title} />
       </main>
-      <ResultsPanel sim={sim} nQubits={circuit.nQubits} />
+      <ResultsPanel sim={sim} nQubits={circuit.nQubits} circuit={circuit} />
     </div>
   )
 }
