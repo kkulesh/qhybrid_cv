@@ -1,10 +1,13 @@
-"""Run a circuit from the web composer in PennyLane (default.qubit): exact probabilities, state and
-sampled measurement counts. The composer simulates in the browser; this is the same circuit executed
-by the library the hybrid models use, so the two results can be compared."""
+"""Run a circuit from the web composer in PennyLane: exact probabilities, state and sampled measurement
+counts. The composer simulates in the browser; this is the same circuit executed by the library the hybrid
+models use, so the two results can be compared. Device: default.qubit or the free local simulator of
+Amazon Braket (braket.local.qubit); cloud devices are not offered (qhybrid.models.DEVICES)."""
 import time
 
 import numpy as np
 import pennylane as qml
+
+from qhybrid.models import make_device, with_shots
 
 GATES = {
     "H": qml.Hadamard, "X": qml.PauliX, "Y": qml.PauliY, "Z": qml.PauliZ, "S": qml.S, "T": qml.T, "SX": qml.SX,
@@ -42,16 +45,17 @@ def validate(n, ops):
             raise ValueError(f"Вентиль {k} потребує кут.")
 
 
-def run(n, ops, shots, seed):
+def run(n, ops, shots, seed, device="default.qubit"):
     """Composer convention: qubit q is bit q of the basis index (q[0] least significant), so PennyLane's
-    wire order is reversed when reading probabilities and the state."""
+    wire order is reversed when reading probabilities and the state. The Braket simulator has no seed,
+    so its counts differ from run to run."""
     validate(n, ops)
     ops = sorted(ops, key=lambda o: o["col"])
     measured = sorted({o["wires"][0] for o in ops if o["kind"] == "MEASURE"})
     rev = list(range(n - 1, -1, -1))
     t0 = time.perf_counter()
 
-    @qml.qnode(qml.device("default.qubit", wires=n))
+    @qml.qnode(make_device(device, n))
     def exact():
         _apply(ops)
         return qml.probs(wires=rev), qml.state()
@@ -68,10 +72,8 @@ def run(n, ops, shots, seed):
             _apply(ops)
             return qml.counts(wires=order)
 
-        if hasattr(qml, "set_shots"):  # PennyLane >= 0.42; older versions take shots on the device
-            sampled = qml.set_shots(qml.QNode(sampled, qml.device("default.qubit", wires=n, seed=seed)), shots=shots)
-        else:
-            sampled = qml.QNode(sampled, qml.device("default.qubit", wires=n, shots=shots, seed=seed))
+        sampled = with_shots(qml.QNode(sampled, make_device(device, n, seed)), shots)
         out["counts"] = {str(k): int(v) for k, v in sampled().items()}
+    out["device"] = device
     out["time_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     return out

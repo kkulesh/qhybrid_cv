@@ -35,7 +35,7 @@ p.add_argument("--workers", type=int, default=4)
 a = p.parse_args()
 
 
-def load(path):
+def load(path, sel_seed=0):
     """Fixed stratified train/val/selection split of the cached training features."""
     d = np.load(path)
     rng = np.random.default_rng(0)
@@ -45,7 +45,8 @@ def load(path):
         tr += list(idx[:a.train_per_class])
         va += list(idx[a.train_per_class:a.train_per_class + a.val_per_class])
     tr, va = rng.permutation(tr), np.array(va)
-    sel = np.concatenate([tr[d["y_train"][tr] == c][:a.select_per_class] for c in np.unique(d["y_train"])])
+    rs = np.random.default_rng(1000 + sel_seed)
+    sel = np.concatenate([rs.permutation(tr[d["y_train"][tr] == c])[:a.select_per_class] for c in np.unique(d["y_train"])])
     Z, y = d["Z_train"].astype(np.float32), d["y_train"]
     return dict(Ztr=Z[tr], ytr=y[tr], Zva=Z[va], yva=y[va], Zsel=Z[sel], ysel=y[sel],
                 Zte=d["Z_test"].astype(np.float32), yte=d["y_test"], n_classes=len(d["classes"]))
@@ -99,10 +100,12 @@ def job(spec):
         append(out / "baselines.csv", dict(dataset=ds, model=kind, n=n, seed=seed, params=n_params(m),
                acc=r["acc"], f1=r["f1"], ms_per_img=r["ms_per_img"], train_s=time.perf_counter() - t0))
     elif kind == "metrics":
-        _, _, n, enc_name, gamma = spec
+        _, _, n, enc_name, gamma, sseed = spec
+        D = load(ds_path, sseed)
         enc = make_encoding(enc_name, n)
         m = encoding_metrics(enc, D["Zsel"], D["ysel"], gamma)
-        append(out / "metrics.csv", dict(dataset=ds, n=n, encoding=enc_name, gamma=gamma, **m,
+        append(out / "metrics.csv", dict(dataset=ds, n=n, encoding=enc_name, gamma=gamma, sample_seed=sseed,
+               m_sel=len(D["ysel"]), **m,
                time_s=time.perf_counter() - t0))
     elif kind == "hybrid":
         _, _, n, enc_name, gamma, seed = spec
@@ -116,7 +119,7 @@ def job(spec):
                params=n_params(m), vqc_params=m.vqc.weights.numel(), acc=r["acc"], f1=r["f1"],
                ms_per_img=r["ms_per_img"], train_s=train_s,
                val_f1_ep1=hist[0]["val_f1"], val_f1_ep2=hist[1]["val_f1"], val_f1_last=hist[-1]["val_f1"],
-               loss_last=hist[-1]["loss"]))
+               loss_last=hist[-1]["loss"], val_hist=" ".join(f"{h['val_f1']:.4f}" for h in hist)))
     return spec
 
 
@@ -129,7 +132,8 @@ if __name__ == "__main__":
             # linear bottleneck of width 2^n - 1 is the matching control for amplitude encoding
             specs += [("mlp", f, n, s), ("linear_bottleneck", f, n, s), ("linear_bottleneck", f, 2 ** n - 1, s)]
         for n, e, g in itertools.product(a.qubits, a.encodings, a.gammas):
-            specs.append(("metrics", f, n, e, g))
+            for ss in a.seeds:
+                specs.append(("metrics", f, n, e, g, ss))
     hybrid = [("hybrid", f, n, e, g, s) for f, n, e, g, s in
               itertools.product(a.features, a.qubits, a.encodings, a.gammas, a.seeds)]
     # heaviest (8-qubit ZZ) first so the pool does not end on one long straggler

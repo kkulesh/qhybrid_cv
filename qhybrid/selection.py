@@ -71,8 +71,12 @@ def random_probe(encoding, X, y, seed=0):
 
 def encoding_metrics(encoding, Z, y, gamma, pca=None):
     """All metrics for one encoding at one scale gamma, using the PCA-initialised adapter."""
+    import time
+    t0 = time.perf_counter()
     W, b = pca if pca is not None else pca_init(Z, encoding.k, encoding.whiten)
     X = encoding.normalize(torch.as_tensor(Z @ W.T + b, dtype=torch.float64), gamma).numpy()
     K = fidelity_kernel(statevectors(encoding, X))
-    return {"kta": centred_kta(K, y), "var": offdiag_var(K), "hs": hs_distance(K, y),
+    kta = centred_kta(K, y)
+    t_kta = time.perf_counter() - t0
+    return {"kta": kta, "kta_time_s": t_kta, "var": offdiag_var(K), "hs": hs_distance(K, y),
             "probe": random_probe(encoding, X, y), "k_mean": float(K[~np.eye(len(K), dtype=bool)].mean())}

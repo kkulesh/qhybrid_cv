@@ -1,6 +1,8 @@
 """QHybrid-CV web API: classify an image with the frozen YOLO11 backbone and a hybrid (VQC) or
 classical head, reporting the time spent in every stage; choose the encoding (KTA), train models and
-add own datasets, all as background jobs with progress streamed to the browser.
+add own datasets, all as background jobs with progress streamed to the browser; compare results.
+Circuits run on default.qubit or, for classification and the composer, on the free local Amazon Braket
+simulator (braket.local.qubit, needs amazon-braket-pennylane-plugin). No cloud QPU is used.
 
 Run:  uvicorn server.app:app --port 8000
 Env:  QHYBRID_MODELS    VOC models: registry.json and <id>.pt      (default models/voc)
@@ -29,11 +31,11 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
-from server import circuit as qcircuit, datasets, jobs
+from server import circuit as qcircuit, datasets, jobs, prep as qprep, results as qresults
 
 from qhybrid.encodings import make_encoding
 from qhybrid.features import YoloFeatureExtractor
-from qhybrid.models import HybridModel
+from qhybrid.models import DEVICES, HybridModel
 
 log = logging.getLogger("uvicorn.error")  # printed in the uvicorn console
 ENC_GATES = {
@@ -117,8 +119,9 @@ def ms(t0):
 
 
 @torch.no_grad()
-def run_head(st, model_id, z):
-    """Run one head on features z (1 x 1280); returns probabilities and per-stage timings."""
+def run_head(st, model_id, z, device="default.qubit", shots=None):
+    """Run one head on features z (1 x 1280); returns probabilities and per-stage timings. The circuit of a
+    hybrid model runs on `device` (a local simulator), exactly or with `shots` measurements."""
     meta, m = st.models[model_id]
     classes = st.classes
     t = {}
@@ -134,16 +137,17 @@ def run_head(st, model_id, z):
     # 2. Quantum circuit (qhybrid/models.py: VQC): the encoding gates load x into n qubits
     #    (qhybrid/encodings.py: *Encoding.circuit), then StronglyEntanglingLayers, then <Z_i> is measured.
     #    Encoding and variational layers form one circuit, so they are timed together.
-    t0 = time.perf_counter(); q = m.vqc(x); t["circuit"] = ms(t0)
+    t0 = time.perf_counter(); q = m.vqc.run_on(x, device, shots); t["circuit"] = ms(t0)
     # 3. Classical head: BatchNorm + linear layer, n expectation values -> class scores.
     t0 = time.perf_counter(); logits = m.head(m.norm(q)); t["head"] = ms(t0)
     p = torch.softmax(logits, -1)[0]
     xs = ", ".join(f"{v:.3f}" for v in x[0, :6].tolist())
     qs = ", ".join(f"{v:.3f}" for v in q[0, :6].tolist())
     log.info("[%s/%s] YOLO11 %d ознак -> адаптер -> %d чисел [%s%s] -> кодування %s на %d кубітах "
-             "-> VQC (%d шари) -> <Z> [%s%s] -> голова -> %s (%.3f)",
+             "-> VQC (%d шари; %s, %s) -> <Z> [%s%s] -> голова -> %s (%.3f)",
              st.ds.id, model_id, z.shape[1], x.shape[1], xs, ", ..." if x.shape[1] > 6 else "",
-             ENC_GATES[meta["encoding"]], meta["n"], meta["layers"], qs, ", ..." if q.shape[1] > 6 else "",
+             ENC_GATES[meta["encoding"]], meta["n"], meta["layers"], device,
+             f"shots {shots}" if shots else "точно", qs, ", ..." if q.shape[1] > 6 else "",
              classes[int(p.argmax())], float(p.max()))
     return p, t
 
@@ -166,7 +170,7 @@ def features(img):
     return z, {"preprocess": t_pre, "backbone": t_bb}
 
 
-def result(st, model_id, p, timings, top_k):
+def result(st, model_id, p, timings, top_k, device="default.qubit", shots=None):
     meta, classes = st.models[model_id][0], st.classes
     top = torch.topk(p, min(top_k, len(classes)))
     return {
@@ -175,12 +179,49 @@ def result(st, model_id, p, timings, top_k):
         "confidence": round(float(top.values[0]), 5),
         "top": [{"label": classes[int(i)], "p": round(float(v), 5)} for v, i in zip(top.values, top.indices)],
         "timings_ms": {**timings, "total": round(sum(timings.values()), 3)},
+        # a classical model has no circuit, so the device does not apply to it
+        "device": device if meta["kind"] == "hybrid" else None,
+        "shots": shots if meta["kind"] == "hybrid" else None,
     }
 
 
 @app.get("/api/health")
 def health():
     return {"status": "ok", "datasets": len(all_datasets()), "models": len(get_store("voc").models)}
+
+
+def device_status():
+    """Devices offered in the app, with whether each one can be created here (the Braket plugin is optional)."""
+    out = []
+    for dev_id, name in DEVICES.items():
+        try:
+            qcircuit.make_device(dev_id, 1); ok, err = True, None
+        except RuntimeError as e:
+            ok, err = False, str(e)
+        out.append({"id": dev_id, "name": name, "available": ok, "error": err})
+    return out
+
+
+_devices = None
+
+
+@app.get("/api/devices")
+def list_devices():
+    global _devices
+    if _devices is None:
+        _devices = device_status()
+    return _devices
+
+
+def check_device(device, shots):
+    if device not in DEVICES:
+        raise HTTPException(400, f"Невідомий пристрій {device}. Доступні: {', '.join(DEVICES)}.")
+    if not any(d["id"] == device and d["available"] for d in list_devices()):
+        raise HTTPException(503, f"Пристрій {device} недоступний на сервері. Встановіть плагін: "
+                                 "pip install amazon-braket-pennylane-plugin")
+    if shots < 0 or shots > 100_000:
+        raise HTTPException(400, "Кількість вимірювань (shots) має бути від 0 (точно) до 100000.")
+    return shots or None
 
 
 @app.get("/api/models")
@@ -216,30 +257,42 @@ def model_or_404(st, model):
         raise HTTPException(404, f"Модель '{model}' не знайдено в наборі '{st.ds.name}'.")
 
 
+def prepared(img, prep):
+    """Optional preparation (server/prep.py), e.g. "digit": make a photo of a digit look like MNIST."""
+    if prep and prep not in qprep.PREPS:
+        raise HTTPException(400, f"Невідома підготовка зображення: {prep}.")
+    return qprep.apply(img, prep)
+
+
 @app.post("/api/classify")
 async def classify(file: UploadFile = File(...), model: str = Form("amplitude-8q"), top_k: int = Form(5),
-                   dataset: str = Form("voc")):
+                   dataset: str = Form("voc"), prep: str = Form(""), device: str = Form("default.qubit"),
+                   shots: int = Form(0)):
+    """device: local simulator for the circuit; shots = 0 means exact expectation values."""
     st = get_store(dataset)
     model_or_404(st, model)
-    img = read_image(await file.read())
+    shots = check_device(device, shots)
+    img, shown = prepared(read_image(await file.read()), prep)
     z, t = features(img)
-    p, th = run_head(st, model, z)
-    return result(st, model, p, {**t, **th}, top_k)
+    p, th = run_head(st, model, z, device, shots)
+    return {**result(st, model, p, {**t, **th}, top_k, device, shots), "prepared": shown}
 
 
 @app.post("/api/classify/compare")
-async def compare(file: UploadFile = File(...), top_k: int = Form(3), dataset: str = Form("voc")):
+async def compare(file: UploadFile = File(...), top_k: int = Form(3), dataset: str = Form("voc"),
+                  prep: str = Form(""), device: str = Form("default.qubit"), shots: int = Form(0)):
     """Run the backbone once and every head of the dataset on the same features."""
     st = get_store(dataset)
+    shots = check_device(device, shots)
     if not st.models:
         raise HTTPException(404, "Для цього набору ще немає навчених моделей.")
-    img = read_image(await file.read())
+    img, shown = prepared(read_image(await file.read()), prep)
     z, t = features(img)
     out = []
     for mid in st.models:
-        p, th = run_head(st, mid, z)
-        out.append(result(st, mid, p, th, top_k))
-    return {"backbone_ms": round(t["preprocess"] + t["backbone"], 3), "results": out}
+        p, th = run_head(st, mid, z, device, shots)
+        out.append(result(st, mid, p, th, top_k, device, shots))
+    return {"backbone_ms": round(t["preprocess"] + t["backbone"], 3), "results": out, "prepared": shown}
 
 
 # ---------- datasets ----------
@@ -429,21 +482,31 @@ class CircuitRun(BaseModel):
     ops: list[CircuitOp] = Field(max_length=2000)
     shots: int = Field(1024, ge=1, le=100000)
     seed: int = 1
+    device: str = "default.qubit"
 
 
 @app.post("/api/circuit/run")
 def run_circuit(c: CircuitRun):
     ops = [o.model_dump() for o in c.ops]
+    check_device(c.device, c.shots)
     try:
-        r = qcircuit.run(c.nQubits, ops, c.shots, c.seed)
+        r = qcircuit.run(c.nQubits, ops, c.shots, c.seed, c.device)
     except ValueError as e:
         raise HTTPException(400, str(e))
     gates = sum(o["kind"] not in ("MEASURE", "BARRIER") for o in ops)
     top = sorted(r.get("counts", {}).items(), key=lambda kv: -kv[1])[:4]
-    log.info("[схема] PennyLane default.qubit: кубітів %d, вентилів %d, виміряно c[%s], shots %d (seed %d) -> %s (%.1f мс)",
-             c.nQubits, gates, ", ".join(map(str, r["measured"])) or "-", c.shots, c.seed,
+    log.info("[схема] PennyLane %s: кубітів %d, вентилів %d, виміряно c[%s], shots %d (seed %d) -> %s (%.1f мс)",
+             c.device, c.nQubits, gates, ", ".join(map(str, r["measured"])) or "-", c.shots, c.seed,
              ", ".join(f"{k}: {v}" for k, v in top) or "без вимірювань", r["time_ms"])
     return r
+
+
+# ---------- results: compare trained models and experiment runs ----------
+
+@app.get("/api/results")
+def results():
+    """Trained models of every dataset and the experiment grids in results/ (averaged over seeds)."""
+    return {"models": qresults.model_rows(all_datasets()), "experiments": qresults.experiment_rows(ROOT / "results")}
 
 
 dist = ROOT / "web" / "dist"

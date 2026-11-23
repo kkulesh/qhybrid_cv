@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Circuit } from '../quantum/gates'
 import { bitstring, sampleCounts, type SimResult } from '../quantum/simulator'
 
-type Runner = 'browser' | 'server'
-interface ServerRun { counts: Record<string, number>; probs: number[]; time_ms: number; shots: number; seed: number; circuit: Circuit }
+// 'browser' runs the built-in simulator; the others name the PennyLane device the server runs the circuit on
+type Runner = 'browser' | 'default.qubit' | 'braket.local.qubit'
+interface ServerRun { counts: Record<string, number>; probs: number[]; time_ms: number; shots: number; seed: number; circuit: Circuit; device: string }
+interface Device { id: string; available: boolean }
 
 type Tab = 'probs' | 'counts' | 'state' | 'bloch'
 
@@ -16,6 +18,10 @@ export function ResultsPanel({ sim, nQubits, circuit }: { sim: SimResult; nQubit
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const req = useRef(0)
+  const onServer = runner !== 'browser'
+  const [devices, setDevices] = useState<Device[]>([])
+  useEffect(() => { fetch('/api/devices').then((r) => (r.ok ? r.json() : [])).then(setDevices).catch(() => setDevices([])) }, [])
+  const braketOk = devices.some((d) => d.id === 'braket.local.qubit' && d.available)
 
   // Server mode: the circuit is executed by PennyLane on the backend (server/circuit.py) and logged there.
   const runOnServer = async (s: number) => {
@@ -24,18 +30,18 @@ export function ResultsPanel({ sim, nQubits, circuit }: { sim: SimResult; nQubit
     try {
       const r = await fetch('/api/circuit/run', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ nQubits: circuit.nQubits, ops: circuit.ops, shots, seed: s }),
+        body: JSON.stringify({ nQubits: circuit.nQubits, ops: circuit.ops, shots, seed: s, device: runner }),
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : `Помилка сервера (${r.status}).`)
-      if (id === req.current) setRun({ ...j, shots, seed: s, circuit })
+      if (id === req.current) setRun({ ...j, shots, seed: s, circuit, device: runner })
     } catch (e) {
       if (id === req.current) setErr(e instanceof TypeError ? 'Сервер недоступний. Запустіть бекенд: uvicorn server.app:app --port 8000' : (e as Error).message)
     } finally { if (id === req.current) setBusy(false) }
   }
-  const rerun = () => { const s = seed + 1; setSeed(s); if (runner === 'server') runOnServer(s) }
-  useEffect(() => { if (runner === 'server' && tab === 'counts' && !run && sim.measured.length) runOnServer(seed) }, [runner, tab])  // eslint-disable-line react-hooks/exhaustive-deps
-  const stale = run && (run.circuit !== circuit || run.shots !== shots)
+  const rerun = () => { const s = seed + 1; setSeed(s); if (onServer) runOnServer(s) }
+  useEffect(() => { if (onServer && tab === 'counts' && (!run || run.device !== runner) && sim.measured.length) runOnServer(seed) }, [runner, tab])  // eslint-disable-line react-hooks/exhaustive-deps
+  const stale = run && (run.circuit !== circuit || run.shots !== shots || run.device !== runner)
   return (
     <section className="panel results">
       <header className="panel-head tabs" role="tablist">
@@ -57,20 +63,21 @@ export function ResultsPanel({ sim, nQubits, circuit }: { sim: SimResult; nQubit
                 <label className="field inline"><span>Виконавець</span>
                   <select value={runner} onChange={(e) => setRunner(e.target.value as Runner)}>
                     <option value="browser">Браузер (вбудований симулятор)</option>
-                    <option value="server">Сервер (PennyLane)</option>
+                    <option value="default.qubit">Сервер: PennyLane, вбудований симулятор (default.qubit)</option>
+                    <option value="braket.local.qubit" disabled={!braketOk}>Сервер: Amazon Braket, локальний симулятор (braket.local.qubit){braketOk ? '' : ' (не встановлено)'}</option>
                   </select>
                 </label>
-                {runner === 'server' && stale
+                {onServer && stale
                   ? <button className="btn primary" disabled={busy} onClick={() => runOnServer(seed)}>Запустити на сервері</button>
                   : <button className="btn" disabled={busy} onClick={rerun}>Повторити запуск</button>}
                 <span className="muted small">Біти: c[{[...sim.measured].sort((a, b) => b - a).join('], c[')}]</span>
               </div>
               {runner === 'browser' && <CountsChart sim={sim} shots={shots} seed={seed} />}
-              {runner === 'server' && (
+              {onServer && (
                 <>
                   {busy && <p className="hint">Виконання на сервері…</p>}
                   {err && <p className="error-note" role="alert">{err}</p>}
-                  {stale && !busy && <p className="warn">Схему або кількість вимірювань змінено після запуску. Натисніть «Запустити на сервері».</p>}
+                  {stale && !busy && <p className="warn">Схему, кількість вимірювань або симулятор змінено після запуску. Натисніть «Запустити на сервері».</p>}
                   {run && <ServerCounts run={run} sim={sim} current={!stale} />}
                 </>
               )}
@@ -149,8 +156,10 @@ function ServerCounts({ run, sim, current }: { run: ServerRun; sim: SimResult; c
     <>
       <Bars items={items} yLabel={`Частка з ${run.shots} вимірювань, %`} />
       <p className="muted small">
-        Виконано на сервері в PennyLane (default.qubit) за {run.time_ms.toFixed(1).replace('.', ',')} мс, зерно {run.seed}. Запуск записано в журнал сервера.
-        {diff !== null && <> Точні ймовірності PennyLane збігаються з браузерним симулятором: найбільша різниця {diff < 1e-12 ? diff.toExponential(0) : diff.toFixed(6)}.</>}
+        {run.device === 'braket.local.qubit'
+          ? <>Виконано на сервері в локальному симуляторі Amazon Braket (braket.local.qubit) за {run.time_ms.toFixed(1).replace('.', ',')} мс. Цей симулятор не приймає зерно, тому розподіл змінюється від запуску до запуску.</>
+          : <>Виконано на сервері в PennyLane (default.qubit) за {run.time_ms.toFixed(1).replace('.', ',')} мс, зерно {run.seed}.</>} Запуск записано в журнал сервера.
+        {diff !== null && <> Точні ймовірності на сервері збігаються з браузерним симулятором: найбільша різниця {diff < 1e-12 ? diff.toExponential(0) : diff.toFixed(6)}.</>}
       </p>
     </>
   )

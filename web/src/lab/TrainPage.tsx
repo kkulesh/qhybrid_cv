@@ -79,7 +79,7 @@ export function TrainPage() {
     <div className="lab">
       <section className="panel lab-form">
         <header className="panel-head"><h2>Тренування моделі</h2></header>
-        <p className="hint lead">Навчається гібридна модель: заморожена YOLO11 дає 1280 ознак, адаптер готує їх для обраного кодування, далі варіаційна квантова схема і лінійна голова на класи набору. Для порівняння можна навчити класичну лінійну модель на тих самих ознаках.</p>
+        <p className="hint lead">Навчається гібридна модель: заморожена YOLO11 дає 1280 ознак, адаптер готує їх для обраного кодування, далі варіаційна квантова схема і лінійна голова на класи набору. Для порівняння можна навчити логістичну регресію на тих самих ознаках.</p>
         {fromSel && <p className="note">Параметри заповнено рекомендацією сторінки «Вибір кодування».</p>}
         <DatasetPicker disabled={running} />
         {ds && !ds.available && <p className="warn" role="alert">Немає файлу ознак ({ds.path}). Спершу виконайте python scripts/extract_features.py.</p>}
@@ -88,7 +88,7 @@ export function TrainPage() {
           <label className="field">Тип моделі
             <select value={p.kind} onChange={(e) => set('kind', e.target.value as TrainParams['kind'])}>
               <option value="hybrid">Гібридна (VQC)</option>
-              <option value="classical">Класична лінійна</option>
+              <option value="classical">Логістична регресія</option>
             </select>
           </label>
           {hybrid && <>
@@ -142,7 +142,7 @@ export function TrainPage() {
       <section className="panel lab-out">
         <header className="panel-head">
           <h2>Хід навчання</h2>
-          {job.status !== 'idle' && <span className="muted small">{shownHybrid ? <>{ENCODING_UK[shown.encoding]}, {qubits(shown.n)}, γ = {fmtG(shown.gamma)}, {layers(shown.layers)}</> : 'класична лінійна модель'}</span>}
+          {job.status !== 'idle' && <span className="muted small">{shownHybrid ? <>{ENCODING_UK[shown.encoding]}, {qubits(shown.n)}, γ = {fmtG(shown.gamma)}, {layers(shown.layers)}</> : 'логістична регресія'}</span>}
         </header>
         {job.status === 'idle' && <p className="hint">Після запуску тут з'являтимуться втрати і F1 на валідації після кожної епохи.</p>}
         {job.status !== 'idle' && (
@@ -176,6 +176,7 @@ export function TrainPage() {
               <div><dt>Macro-F1</dt><dd><b>{f3(result.test_f1)}</b></dd></div>
               <div><dt>Точність</dt><dd>{f3(result.test_acc)}</dd></div>
               <div><dt>F1 на валідації</dt><dd>{f3(result.val_f1)}</dd></div>
+              <div><dt>Зерно (seed)</dt><dd>{result.seed}</dd></div>
               <div><dt>Параметрів</dt><dd>{result.params.toLocaleString('uk-UA')}</dd></div>
               <div><dt>Час навчання</dt><dd>{result.train_s.toFixed(1).replace('.', ',')} с</dd></div>
               <div><dt>Збережено як</dt><dd className="mono small">{result.id}</dd></div>
@@ -200,10 +201,10 @@ export function TrainPage() {
             <h3 className="sub">Навчені на цій сторінці моделі набору «{ds?.name}»</h3>
             <div className="tbl-wrap">
               <table className="tbl plain">
-                <thead><tr><th>Модель</th><th>γ</th><th>Шари</th><th>Епох</th><th>F1 (тест)</th><th>Точність</th></tr></thead>
+                <thead><tr><th>Модель</th><th>Seed</th><th>γ</th><th>Шари</th><th>Епох</th><th>F1 (тест)</th><th>Точність</th></tr></thead>
                 <tbody>{custom.map((m) => {
                   const x = m as ModelInfo & { epochs?: number }
-                  return <tr key={m.id} title={m.id}><td>{m.kind === 'classical' ? 'Класична лінійна' : `${ENCODING_UK[m.encoding ?? '']}, ${qubits(m.n ?? 0)}`}</td><td>{m.gamma != null ? fmtG(m.gamma) : '—'}</td><td>{m.kind === 'classical' ? '—' : m.layers}</td><td>{x.epochs ?? '—'}</td><td>{f3(m.test_f1)}</td><td>{f3(m.test_acc)}</td></tr>
+                  return <tr key={m.id} title={m.id}><td>{m.kind === 'classical' ? 'Логістична регресія' : `${ENCODING_UK[m.encoding ?? '']}, ${qubits(m.n ?? 0)}`}</td><td>{m.seed}</td><td>{m.gamma != null ? fmtG(m.gamma) : '—'}</td><td>{m.kind === 'classical' ? '—' : m.layers}</td><td>{x.epochs ?? '—'}</td><td>{f3(m.test_f1)}</td><td>{f3(m.test_acc)}</td></tr>
                 })}</tbody>
               </table>
             </div>

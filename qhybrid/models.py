@@ -4,6 +4,32 @@ import pennylane as qml
 import torch
 from torch import nn
 
+# Quantum devices the circuits can run on. Training always uses default.qubit (exact, backprop);
+# braket.local.qubit is the free local simulator of the Amazon Braket SDK (amazon-braket-pennylane-plugin),
+# offered for running trained models and composer circuits. No cloud (QPU) devices are used.
+DEVICES = {
+    "default.qubit": "Сервер: PennyLane, вбудований симулятор (default.qubit)",
+    "braket.local.qubit": "Сервер: Amazon Braket, локальний симулятор (braket.local.qubit)",
+}
+
+
+def make_device(name, wires, seed=None):
+    """A local simulator from DEVICES (ValueError for anything else, so no cloud device can be requested).
+    The seed is used by default.qubit only: the Braket local simulator has no seed option."""
+    if name not in DEVICES:
+        raise ValueError(f"Невідомий пристрій {name}. Доступні: {', '.join(DEVICES)}.")
+    kw = {"seed": seed} if seed is not None and name == "default.qubit" else {}
+    try:
+        return qml.device(name, wires=wires, **kw)
+    except Exception as e:  # the plugin is not installed or failed to load
+        raise RuntimeError(f"Пристрій {name} недоступний ({e}). Встановіть плагін: "
+                           "pip install amazon-braket-pennylane-plugin") from e
+
+
+def with_shots(qnode, shots):
+    """Finite-shot execution of a QNode (PennyLane >= 0.42 sets shots on the QNode, not the device)."""
+    return qnode if not shots else qml.set_shots(qnode, shots=shots)
+
 
 class Adapter(nn.Module):
     """Linear projection d -> k, initialised from PCA, followed by the encoding's
@@ -51,10 +77,8 @@ class VQC(nn.Module):
         if readout == "zz":
             obs += [qml.PauliZ(i) @ qml.PauliZ(j) for i in range(n) for j in range(i + 1, n)]
         self.n_out = len(obs)
-        dev = qml.device("default.qubit", wires=n)
 
-        @qml.qnode(dev, interface="torch", diff_method="backprop")
-        def qnode(inputs, weights):
+        def circuit(inputs, weights):
             if reupload:
                 for layer in range(n_layers):
                     encoding.circuit(inputs)
@@ -64,12 +88,31 @@ class VQC(nn.Module):
                 qml.StronglyEntanglingLayers(weights, wires=range(n))
             return [qml.expval(o) for o in obs]
 
+        # training and the default inference: exact default.qubit with backpropagation
+        self.qnode = qml.QNode(circuit, qml.device("default.qubit", wires=n), interface="torch", diff_method="backprop")
+        self._circuit, self._qnodes = circuit, {}
+
         g = torch.Generator().manual_seed(seed)
         self.weights = nn.Parameter(0.1 * torch.randn(n_layers, n, 3, generator=g))
-        self.qnode = qnode
 
     def forward(self, x):
         return torch.stack(self.qnode(x, self.weights), dim=-1).float()
+
+    @torch.no_grad()
+    def run_on(self, x, device="default.qubit", shots=None):
+        """Inference with the trained weights on another local device and/or with a finite number of
+        shots (then every <Z> is estimated from samples). Samples are run one by one, because not every
+        device supports parameter broadcasting."""
+        if device == "default.qubit" and not shots:
+            return self(x)
+        key = (device, shots)
+        if key not in self._qnodes:
+            qn = qml.QNode(self._circuit, make_device(device, self.n), interface=None)
+            self._qnodes[key] = with_shots(qn, shots)
+        # float64: the Braket simulator cannot take numpy float32 values as circuit parameters
+        qn, w = self._qnodes[key], self.weights.detach().double().numpy()
+        rows = [np.array(qn(xi, w), dtype=np.float64) for xi in x.detach().double().numpy()]
+        return torch.tensor(np.stack(rows), dtype=torch.float32)
 
 
 class HybridModel(nn.Module):
@@ -85,6 +128,11 @@ class HybridModel(nn.Module):
 
     def forward(self, z):
         return self.head(self.norm(self.vqc(self.adapter(z))))
+
+    @torch.no_grad()
+    def predict_on(self, z, device="default.qubit", shots=None):
+        """Logits with the circuit executed on the given local device (see VQC.run_on)."""
+        return self.head(self.norm(self.vqc.run_on(self.adapter(z), device, shots)))
 
 
 class BottleneckMLP(nn.Module):

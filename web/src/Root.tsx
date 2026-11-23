@@ -5,14 +5,16 @@ import { DatasetPage } from './datasets/DatasetPage'
 import { DatasetProvider } from './datasets/datasets'
 import { SelectionPage } from './lab/SelectionPage'
 import { TrainPage } from './lab/TrainPage'
+import { ResultsPage } from './results/ResultsPage'
 
-type Tab = 'composer' | 'data' | 'select' | 'train' | 'classify'
+type Tab = 'composer' | 'data' | 'select' | 'train' | 'classify' | 'results'
 const TABS: { id: Tab; name: string }[] = [
   { id: 'composer', name: 'Конструктор схем' },
   { id: 'data', name: 'Набір даних' },
   { id: 'select', name: 'Вибір кодування' },
   { id: 'train', name: 'Тренування' },
   { id: 'classify', name: 'Класифікація' },
+  { id: 'results', name: 'Результати' },
 ]
 // the hash may carry parameters, e.g. #train?enc=amplitude&n=8&gamma=1
 const fromHash = (): Tab => TABS.find((t) => t.id !== 'composer' && location.hash.split('?')[0] === `#${t.id}`)?.id ?? 'composer'
@@ -40,6 +42,7 @@ export default function Root() {
       <div hidden={tab !== 'select'}><SelectionPage /></div>
       <div hidden={tab !== 'train'}><TrainPage /></div>
       <div hidden={tab !== 'classify'}><ClassifyPage /></div>
+      <div hidden={tab !== 'results'}><ResultsPage /></div>
     </DatasetProvider>
   )
 }

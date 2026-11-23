@@ -1,5 +1,6 @@
 torch>=2.4
-pennylane>=0.40
+pennylane>=0.42
+amazon-braket-pennylane-plugin>=1.36
 ultralytics>=8.3
 scikit-learn>=1.5
 scipy

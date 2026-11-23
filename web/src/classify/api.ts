@@ -25,8 +25,15 @@ export interface Prediction {
   confidence: number
   top: { label: string; p: number }[]
   timings_ms: Timings
+  prepared?: string | null  // the image as the model saw it, when it was prepared (e.g. as an MNIST digit)
+  device?: string | null    // where the circuit ran (null for the classical model)
+  shots?: number | null     // null: exact expectation values
 }
-export interface Comparison { backbone_ms: number; results: Prediction[] }
+export interface Device { id: string; name: string; available: boolean; error: string | null }
+/** Where the hybrid model's circuit runs: a local simulator, exactly (shots = 0) or with sampling. */
+export interface RunOn { device: string; shots: number }
+export const EXACT: RunOn = { device: 'default.qubit', shots: 0 }
+export interface Comparison { backbone_ms: number; results: Prediction[]; prepared?: string | null }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, init)
@@ -39,23 +46,30 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const q = (dataset: string) => `dataset=${encodeURIComponent(dataset)}`
+export const getDevices = () => call<Device[]>('/api/devices')
 export const getModels = (dataset = 'voc') => call<Registry>(`/api/models?${q(dataset)}`)
 export const getSamples = (dataset = 'voc') => call<Sample[]>(`/api/samples?${q(dataset)}`)
 export const sampleUrl = (name: string, dataset = 'voc') => `/api/samples/${encodeURIComponent(name)}?${q(dataset)}`
 
-export function classify(file: Blob, model: string, topK = 5, dataset = 'voc') {
+export function classify(file: Blob, model: string, topK = 5, dataset = 'voc', prep = '', on: RunOn = EXACT) {
   const fd = new FormData()
+  fd.append('device', on.device)
+  fd.append('shots', String(on.shots))
   fd.append('file', file, 'image')
   fd.append('model', model)
   fd.append('top_k', String(topK))
   fd.append('dataset', dataset)
+  fd.append('prep', prep)
   return call<Prediction>('/api/classify', { method: 'POST', body: fd })
 }
 
-export function compareAll(file: Blob, topK = 3, dataset = 'voc') {
+export function compareAll(file: Blob, topK = 3, dataset = 'voc', prep = '', on: RunOn = EXACT) {
   const fd = new FormData()
+  fd.append('device', on.device)
+  fd.append('shots', String(on.shots))
   fd.append('file', file, 'image')
   fd.append('top_k', String(topK))
   fd.append('dataset', dataset)
+  fd.append('prep', prep)
   return call<Comparison>('/api/classify/compare', { method: 'POST', body: fd })
 }

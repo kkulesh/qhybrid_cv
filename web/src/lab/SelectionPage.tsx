@@ -65,6 +65,7 @@ export function SelectionPage() {
           <input type="number" min={2} max={maxPer} value={Math.min(perClass, maxPer)} disabled={running}
             onChange={(e) => setPerClass(Math.max(2, Math.min(maxPer, +e.target.value || 2)))} />
           <span className="small muted">{Math.min(perClass, maxPer) * (ds?.classes?.length ?? 0)} зображень з навчальної частини набору</span>
+          {maxPer < 100 && <span className="small muted">Максимум {maxPer}: стільки навчальних зображень у найменшому класі, а вибірка має бути збалансованою.</span>}
         </label>
 
         <fieldset className="checks" disabled={running}>
